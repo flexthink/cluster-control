@@ -1,0 +1,7 @@
+servers:
+  server-1:
+    label: Server 1
+    host: server1.example.com
+  server-2:
+    label: Server 2
+    host: server2.example.com
