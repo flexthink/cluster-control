@@ -20,6 +20,20 @@ class ClusterInfoException(Exception):
     """
 
     def __init__(self, message, output=None):
+        """Initialize the exception with a message and optional command output.
+
+        Arguments
+        ---------
+        message : str
+            Error message
+        output : str, optional
+            Additional output from the failed command
+
+        Returns
+        -------
+        None
+            Initializes the exception instance
+        """
         if output:
             message = f"{message}\nOutput:\n{output}"
         super().__init__(message)
@@ -52,7 +66,10 @@ def get_queue():
         )
         return parse_queue(result.stdout)
     except subprocess.CalledProcessError as e:
-        raise ClusterInfoException(f"Error retrieving queue: {e}", output=e.stderr)
+        raise ClusterInfoException(
+            f"Error retrieving queue: {e}",
+            output=e.stderr,
+        )
 
 
 def parse_queue(output):
@@ -86,10 +103,9 @@ def parse_queue(output):
                         "job_name": job_name,
                         "status": status,
                         "time_left": time_left,
-                        "time_started": time_started.isoformat(),
+                        "time_started": (time_started.isoformat()),
                         "time_pending": (
-                            str(time_pending) if time_pending
-                            else None
+                            str(time_pending) if time_pending else None
                         ),
                     }
                 )
@@ -97,22 +113,39 @@ def parse_queue(output):
 
 
 def get_recent(experiments_path, creation_cutoff, activity_cutoff, queue):
+    """Find recent experiments not currently in the queue.
+
+    Arguments
+    ---------
+    experiments_path : pathlib.Path
+        Path to the experiments directory
+    creation_cutoff : datetime
+        Earliest creation datetime to consider
+    activity_cutoff : datetime
+        Earliest activity datetime to consider
+    queue : list of dict
+        Current job queue entries
+
+    Returns
+    -------
+    result : list of dict
+        List of recent experiments (with isoformatted dates)
+    """
     experiment_paths = [
         path
         for path in experiments_path.glob("*")
         if path.is_dir()
         and datetime.fromtimestamp(path.stat().st_ctime) >= creation_cutoff
+        and (path / "output").exists()
     ]
     experiments = [
         {
             "experiment_name": experiment_path.name,
-            "time_activity": get_last_activity_time(experiment_path)
+            "time_activity": get_last_activity_time(experiment_path),
         }
         for experiment_path in experiment_paths
     ]
-    queue_job_names = {
-        job["job_name"] for job in queue
-    }
+    queue_job_names = {job["job_name"] for job in queue}
     result = [
         format_dates(experiment)
         for experiment in experiments
@@ -123,6 +156,19 @@ def get_recent(experiments_path, creation_cutoff, activity_cutoff, queue):
 
 
 def get_last_activity_time(experiment_path):
+    """Get the most recent activity time for an experiment.
+
+    Arguments
+    ---------
+    experiment_path : pathlib.Path
+        Path to the experiment directory
+
+    Returns
+    -------
+    datetime
+        The most recent modification time among output files, or the
+        experiment directory mtime if no output files exist
+    """
     timestamps = [
         datetime.fromtimestamp(file_name.stat().st_mtime)
         for file_name in experiment_path.glob("output/*.txt")
@@ -135,32 +181,43 @@ def get_last_activity_time(experiment_path):
 
 
 def format_dates(values):
+    """Convert datetime values in a mapping to ISO 8601 strings.
+
+    Arguments
+    ---------
+    values : dict
+        Mapping potentially containing datetime values
+
+    Returns
+    -------
+    dict
+        New mapping where datetime values are replaced by isoformat strings
+    """
     return {
         key: value.isoformat() if isinstance(value, datetime) else value
         for key, value in values.items()
     }
 
 
-
 @click.command()
 @click.option(
     "--experiments-path",
     help="The path to the experiments folder",
-    default="~/experiments"
+    default="~/experiments",
 )
 @click.option(
     "--recent-creation-cutoff",
     help="A date or a natural language string (e.g. '1 week') indicating"
     "the earliest date on which an experiment must be created "
     "to count as recent",
-    default="1 week"
+    default="1 week",
 )
 @click.option(
     "--recent-activity-cutoff",
     help="A date or a natural language string (e.g. '2 months') indicating"
     "the earliest date on which an experiment must have had activity"
     "to count as recent",
-    default="1 day"
+    default="1 day",
 )
 def main(
     experiments_path,
@@ -183,14 +240,20 @@ def main(
     recent_creation_cutoff_date = dateparser.parse(recent_creation_cutoff)
     recent_activity_cutoff_date = dateparser.parse(recent_activity_cutoff)
     if recent_creation_cutoff_date is None:
-        raise click.ClickException(f"Unable to parse --recent-creation-cutoff {recent_creation_cutoff}")
+        raise click.ClickException(
+            "Unable to parse --recent-creation-cutoff "
+            f"{recent_creation_cutoff}"
+        )
     if recent_activity_cutoff_date is None:
-        raise click.ClickException(f"Unable to parse --recent-creation-cutoff {recent_activity_cutoff}")
+        raise click.ClickException(
+            "Unable to parse --recent-activity-cutoff "
+            f"{recent_activity_cutoff}"
+        )
     recent = get_recent(
         experiments_path=experiments_path,
         creation_cutoff=recent_creation_cutoff_date,
         activity_cutoff=recent_activity_cutoff_date,
-        queue=queue
+        queue=queue,
     )
     dashboard = {"queue": queue, "recent": recent}
     json.dump(dashboard, sys.stdout, indent=2)

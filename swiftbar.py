@@ -3,7 +3,6 @@ import json
 import re
 import subprocess
 import humanize
-import dateparser
 from pathlib import Path
 
 import click
@@ -63,6 +62,11 @@ def get_dashboard(config):
     dashboard : dict
         Dashboard data parsed from JSON output
     """
+    if is_marked_down():
+        return {
+            "queue": [],
+            "error": "A connection attempt has failed, please reconnect",
+        }
     try:
         venv = config.get("venv")
         if venv:
@@ -77,9 +81,48 @@ def get_dashboard(config):
         )
         return json.loads(result.stdout)
     except subprocess.CalledProcessError as e:
-        return {"queue": [], "error": f"Command failed: {e}", "output": e.stderr}
+        mark_down()
+        return {
+            "queue": [],
+            "error": f"Command failed: {e}",
+            "output": e.stderr,
+        }
     except json.JSONDecodeError as e:
         return {"queue": [], "error": f"Failed to parse JSON: {e}"}
+
+
+def get_down_flag():
+    """Returns the path to a flag file indicating
+    that the connectionis down
+
+    Returns
+    -------
+    flag_path : pathlib.Path
+        the filesystem path
+    """
+    return Path("~/.swiftbar-cluster-down").expanduser()
+
+
+def mark_down():
+    """Marks the cluster connection as down by
+    setting a filesystem flag"""
+    down_flag = get_down_flag()
+    down_flag.touch()
+
+
+def mark_up():
+    """Marks the cluster connection as up by removing
+    the flag if found"""
+    down_flag = get_down_flag()
+    if down_flag.exists():
+        down_flag.unlink()
+
+
+def is_marked_down():
+    """Determines whether the cluster connection has been
+    marked as down"""
+    down_flag = get_down_flag()
+    return down_flag.exists()
 
 
 def run_connect(config):
@@ -95,12 +138,17 @@ def run_connect(config):
     None
         Prints connection status to stdout
     """
+    success = True
     for key, item in config["servers"].items():
         click.echo(f"{click.style('Connecting: ', fg='yellow')} {key}")
         try:
             subprocess.run(["ssh", item["host"], "/bin/true"], text=True)
         except subprocess.CalledProcessError as e:
             click.echo(f"{click.style('Error:', color='red')} {e}")
+            success = False
+            break
+    if success:
+        mark_up()
 
 
 def output_dashboards(config, dashboards):
@@ -147,7 +195,7 @@ def output_dashboards(config, dashboards):
                 f"param0='{item['host']}' param1=\"'~/rc/tail-log.sh'\" "
                 f"param2='{experiment['experiment_name']}' terminal=true"
             )
-            
+
         print(
             ":computer: Shell | emojize=True symbolize=False "
             f"bash=ssh param0='{item['host']}' terminal=True"
@@ -168,14 +216,10 @@ def output_dashboards(config, dashboards):
 def format_job_label(job):
     if job["status"] == "RUNNING":
         icon = ":rocket:"
-        time_ind = job['time_left']
+        time_ind = job["time_left"]
     elif job["status"] == "PENDING":
         icon = ":hourglass_flowing_sand:"
-        time_pending = re.sub(
-            r"\.\d+$",
-            "",
-            job['time_pending']
-        )
+        time_pending = re.sub(r"\.\d+$", "", job["time_pending"])
         time_ind = f":clock2: {time_pending}"
     else:
         icon = ":warning:"
@@ -184,8 +228,8 @@ def format_job_label(job):
 
 
 def format_experiment_label(experiment):
-    activity_delta = (
-        datetime.now() - datetime.fromisoformat(experiment["time_activity"])
+    activity_delta = datetime.now() - datetime.fromisoformat(
+        experiment["time_activity"]
     )
     time_ind = humanize.naturaldelta(activity_delta)
     return f" :red_circle: {experiment['experiment_name']} ({time_ind})"
@@ -194,7 +238,9 @@ def format_experiment_label(experiment):
 @click.command()
 @click.option("--connect", default=False, is_flag=True)
 @click.option(
-    "--config-file", default="config.yaml", help="Path to the configuration file."
+    "--config-file",
+    default="config.yaml",
+    help="Path to the configuration file.",
 )
 def main(config_file="config.yaml", connect=False):
     """Main entry point for the SwiftBar script.
